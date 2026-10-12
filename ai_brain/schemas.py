@@ -403,6 +403,13 @@ class TattooExtractionDraft(BaseModel):
         default="",
         description="Preferred dates or general availability.",
     )
+    date_to_confirm: str = Field(
+        default="",
+        description=(
+            "YYYY-MM-DD date inferred from a bare weekday that the client "
+            "must confirm before it is saved as the preferred date."
+        ),
+    )
     tattoo_project_type: TattooProjectType = Field(
         default="",
         description="New tattoo, cover-up, continuation, or touch-up.",
@@ -446,7 +453,7 @@ class TattooExtractionDraft(BaseModel):
         ),
     )
 
-    @field_validator("date")
+    @field_validator("date", "date_to_confirm")
     @classmethod
     def validate_date_format(cls, value: str) -> str:
         """Require a real calendar date in the public YYYY-MM-DD format."""
@@ -463,6 +470,58 @@ class TattooExtractionDraft(BaseModel):
     def validate_time_format(cls, value: str) -> str:
         """Require a real clock time in the public 24-hour HH:MM format."""
         return _validate_preferred_time(value)
+
+
+PriceSuggestionBasis = Literal[
+    "ai_market_estimate",
+    "ai_with_approved_history",
+    "approved_history",
+]
+
+
+class PriceSuggestion(BaseModel):
+    """Staff-only price range suggested for a high-risk request."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    currency: Annotated[
+        str,
+        StringConstraints(pattern=r"^[A-Z]{3}$"),
+    ] = "EUR"
+    minimum: int = Field(ge=0, le=50000)
+    maximum: int = Field(ge=0, le=50000)
+    estimated_hours: str = Field(
+        default="",
+        max_length=40,
+        description="Approximate tattooing time, e.g. 3-4 hours.",
+    )
+    complexity: Literal["low", "medium", "high", "unknown"] = "unknown"
+    confidence_level: ConfidenceLevel = "low"
+    basis: PriceSuggestionBasis = "ai_market_estimate"
+    reasoning: str = Field(default="", max_length=600)
+    similar_example_ids: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    internal_only: Literal[True] = True
+    client_safe_to_share: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_range(self) -> Self:
+        """Require the upper amount to be at least the lower amount."""
+        if self.maximum < self.minimum:
+            raise ValueError("maximum must be at least minimum.")
+        return self
+
+    def label(self) -> str:
+        """Render the range for staff, e.g. "EUR 350-500"."""
+        amount = (
+            f"{self.minimum}"
+            if self.minimum == self.maximum
+            else f"{self.minimum}-{self.maximum}"
+        )
+        symbol = "€" if self.currency == "EUR" else f"{self.currency} "
+        return f"{symbol}{amount}"
 
 
 class AIExtractionOutput(BaseModel):
@@ -567,6 +626,13 @@ class AIExtractionOutput(BaseModel):
     )
     telegram_review_required: bool = Field(
         description="Whether the draft must be routed to staff in Telegram.",
+    )
+    price_suggestion: PriceSuggestion | None = Field(
+        default=None,
+        description=(
+            "Staff-only suggested price range, produced for high-risk "
+            "requests. Never send it to the client without staff approval."
+        ),
     )
 
     @field_validator("date")
