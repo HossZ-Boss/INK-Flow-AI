@@ -68,7 +68,7 @@ _STYLE_PATTERN = re.compile(
 )
 _PLACEMENT_PATTERN = re.compile(
     r"\b(?:wrist|hand|finger|arm|forearm|bicep|shoulder|chest|sternum|"
-    r"back|spine|rib|stomach|abdomen|hip|thigh|leg|calf|knee|ankle|"
+    r"back|spine|rib|stomach|abdomen|belly|tummy|hip|thigh|leg|calf|knee|ankle|"
     r"foot|toe|neck|throat|face|head|scalp|ear|tongue)\b",
     flags=re.IGNORECASE,
 )
