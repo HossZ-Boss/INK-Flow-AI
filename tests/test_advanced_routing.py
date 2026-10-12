@@ -1,4 +1,4 @@
-"""Tests for cold-start safety and configuration-driven artist routing."""
+"""Tests for learning-aware and configuration-driven artist routing."""
 
 from __future__ import annotations
 
@@ -157,11 +157,14 @@ def _router(
     )
 
 
-@pytest.mark.parametrize("record_count", range(10))
-def test_cold_start_enforcement(record_count: int) -> None:
-    """Cold start blocks learning but still allows verified config routing."""
+@pytest.mark.parametrize("record_count", [0, 1, 3, 9])
+def test_learning_is_used_without_a_minimum_record_count(
+    record_count: int,
+) -> None:
+    """There is no cold-start gate: any reviewed history is searched."""
     records = _history_records(["hoss"] * record_count)
-    vector_store = FakeVectorStore(records=records, matches=[])
+    matches = [(0.99, record) for record in records]
+    vector_store = FakeVectorStore(records=records, matches=matches)
     engine = StudioDecisionEngine(
         vector_store=cast(VectorStoreManager, vector_store)
     )
@@ -175,25 +178,16 @@ def test_cold_start_enforcement(record_count: int) -> None:
         extracted=_draft(),
         current_message="I want a watercolor eagle tattoo.",
     )
-    expected_reasoning = (
-        "Cold start mode: manual assignment required "
-        f"({record_count}/10 records)."
-    )
 
-    assert result.analysis.suggested_artist == "Unclear"
-    assert result.analysis.risk_level == "high"
-    assert result.analysis.ai_reasoning == expected_reasoning
+    assert "Cold start" not in result.analysis.ai_reasoning
+    assert "Cold start" not in routed.ai_reasoning
     assert routed.suggested_artist == "Hossam"
-    assert routed.risk_level == "high"
-    assert "configured specialties" in routed.ai_reasoning
-    assert result.artist_suggestion.artist_key is None
-    assert result.suggested_next_action.action == "artist_review"
-    assert result.suggested_next_action.requires_human_review is True
-    assert vector_store.search_calls == []
+    assert result.artist_suggestion.artist_key == "hoss"
+    assert len(vector_store.search_calls) == 2
 
 
-def test_post_cold_start_routing() -> None:
-    """At ten records, similar-case frequency selects the active artist."""
+def test_history_votes_select_the_artist() -> None:
+    """Similar-case frequency selects the active artist."""
     records = _history_records(["hoss"] * 6 + ["sliva"] * 4)
     matches = [
         (1.0 - index / 100, record)
