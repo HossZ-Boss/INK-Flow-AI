@@ -13,6 +13,9 @@ venv/
 .env.*
 !.env.example
 
+# Learning index (client data)
+data/
+
 # Tool caches
 .pytest_cache/
 .mypy_cache/
