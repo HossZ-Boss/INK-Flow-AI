@@ -334,9 +334,11 @@ have priority:
 The default rules still consider high risk, missing information, unclear
 artist assignment, and booking readiness.
 
-Vector history currently informs artist and action suggestions. Staff-only
-price estimation continues to use explicit pricing rules and approved history
-inside `StudioDecisionContext`.
+Vector history informs artist and action suggestions, and approved prices from
+similar examples anchor the staff-only `price_suggestion` that every high-risk
+analysis carries (see `ai_brain/price_suggestion.py`). Request-scoped
+`decision_history` supplied by the backend is merged with vector matches.
+There is no cold-start threshold: learning is used from the first record.
 
 ## Creating and ingesting a new learning record
 
@@ -384,29 +386,17 @@ No PostgreSQL driver or connection logic is included in the AI module.
 
 ## Wiring the learning layer into the application
 
-The vector store is optional. Existing callers can continue using static
-request-scoped history. To enable FAISS retrieval, the application composition
-layer must inject the manager into the decision engine.
+`api/dependencies.get_learning_store()` builds an `ai_brain.learning.LearningStore`
+once per process. It loads `LEARNING_INDEX_PATH` (default
+`data/learning.faiss`) when the file exists, or starts an empty index. The
+same `VectorStoreManager` is passed to `StudioAIBrain(vector_store=...)`, which
+shares it with the router, the decision engine, and the price suggester.
 
-```python
-from ai_brain.decision import StudioDecisionEngine
-from ai_brain.processor import StudioAIBrain
-from ai_brain.vector_store import VectorStoreManager
-
-vector_store = VectorStoreManager()
-vector_store.load_index("data/learning.faiss")
-
-decision_engine = StudioDecisionEngine(vector_store=vector_store)
-brain = StudioAIBrain(decision_engine=decision_engine)
-```
-
-For the first startup, when no index file exists, the backend can retrieve
-verified records from PostgreSQL, convert them into history examples, and call
-`vector_store.add_records(examples)`. It can then save the built index.
-
-The default `StudioAIBrain()` currently creates a decision engine without a
-vector store. This is intentional because index location, lifecycle, and
-PostgreSQL hydration belong to the application or backend composition layer.
+The backend feeds it through `POST /api/v1/learning/feedback` after staff
+review. Each call validates the payload, maps artist names to keys, builds a
+`DecisionHistoryExample` with ID `feedback-<inquiry_id>`, embeds it, and saves
+the index to disk. `GET /api/v1/learning/status` reports the record counts.
+To rebuild a lost index, re-post the reviewed outcomes stored in PostgreSQL.
 
 ## Testing strategy
 
@@ -471,7 +461,6 @@ important:
 - The FAISS binary and JSON sidecar are a pair and cannot be separated.
 - Rebuilding or swapping the index during live traffic is not automated.
 - Embedding-model or dimension changes require a complete index rebuild.
-- The default API composition does not automatically load a FAISS index.
 
 ## Summary
 
