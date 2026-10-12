@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from .constants import SERVICE_TITLE, SERVICE_VERSION
-from .routes import health_router, inquiry_router
+from .routes import health_router, inquiry_router, learning_router
 
 
 def create_app() -> FastAPI:
@@ -23,6 +23,7 @@ def create_app() -> FastAPI:
     )
     application.include_router(health_router)
     application.include_router(inquiry_router)
+    application.include_router(learning_router)
     return application
 
 
