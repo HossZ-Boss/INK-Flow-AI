@@ -87,7 +87,7 @@ _NOSE_THREAD = [
         role="user",
         content=(
             "I think I'll move forward with Sandra then.\n"
-            "And I'd visit the studio next Monday."
+            "And I'd visit the studio on 19 October."
         ),
     ),
     Message(
@@ -148,7 +148,7 @@ _CHOOSING_THREAD = [
 ]
 _CHOOSING_MESSAGE = (
     "Okay them im choosing sandra and its gonna be a studio visit for this "
-    "new tattoo, ill come at friday"
+    "new tattoo, ill come on 16 october"
 )
 _CHOOSING_STATE = {
     "lead": {
