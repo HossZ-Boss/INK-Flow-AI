@@ -138,8 +138,13 @@ class VectorStoreManager:
             raw_embeddings,
             len(new_records),
         )
-        self._index.add(embeddings)
+        previous_count = len(self._records)
         self._records.extend(new_records)
+        try:
+            self._index.add(embeddings)
+        except Exception:
+            del self._records[previous_count:]
+            raise
 
     def search_similar_cases(
         self,
