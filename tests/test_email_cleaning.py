@@ -267,8 +267,8 @@ def test_real_email_answers_normalize_inches_and_black_and_grey() -> None:
     ).isoformat()
     assert result.size_estimate_cm == "12.7 cm"
     assert result.color_preference == "black-and-grey"
-    assert result.date == expected_date
-    assert result.availability == expected_date
+    assert result.date == ""
+    assert result.date_to_confirm == expected_date
     assert result.preferred_artist == "Sliva"
     assert result.appointment_type == "studio_visit"
     assert result.tattoo_project_type == "new tattoo"
@@ -276,6 +276,7 @@ def test_real_email_answers_normalize_inches_and_black_and_grey() -> None:
     assert result.missing_information == [
         "tattoo idea",
         "reference images",
+        "preferred dates or availability",
     ]
 
     reply = ConversationReplyComposer().compose_outlook_email(
@@ -389,12 +390,19 @@ def test_calligraphic_wording_conversation_preserves_the_complete_quote() -> Non
     assert "calligraphy tattoo on your leg" in first_reply
     assert "What tattoo style would you prefer?" not in first_reply
 
+    next_wednesday_offset = (
+        2 - calendar_date.today().weekday()
+    ) % 7 or 7
+    expected_wednesday = calendar_date.fromordinal(
+        calendar_date.today().toordinal() + next_wednesday_offset
+    ).isoformat()
+    wednesday = calendar_date.fromisoformat(expected_wednesday)
     second_message = (
         'Tattoo idea is on the leg: "You Cannot reason with a tiger when your '
         'head is in his mouth!!" will be written in a calligraphic style. '
         "Size will be approximately 12 centimeters. Black and gray color. "
-        "I'd prefer Hoss. I'd visit the studio; my preferred date is next "
-        "Wednesday. And that's going to be a new tattoo."
+        "I'd prefer Hoss. I'd visit the studio; my preferred date is "
+        f"{wednesday.day} {wednesday:%B}. And that's going to be a new tattoo."
     )
     history = [
         {"role": "user", "content": first_message},
@@ -427,12 +435,6 @@ def test_calligraphic_wording_conversation_preserves_the_complete_quote() -> Non
     assert second.placement == "leg"
     assert second.size_estimate_cm == "12 cm"
     assert second.color_preference == "black-and-grey"
-    next_wednesday_offset = (
-        2 - calendar_date.today().weekday()
-    ) % 7 or 7
-    expected_wednesday = calendar_date.fromordinal(
-        calendar_date.today().toordinal() + next_wednesday_offset
-    ).isoformat()
     assert second.date == expected_wednesday
     assert second.preferred_artist == "Hossam"
     assert second.appointment_type == "studio_visit"
