@@ -222,6 +222,12 @@ def pricing_was_requested(
     return bool(_PRICING_PATTERN.search(combined))
 
 
+def date_confirmation_question(iso_date: str) -> str:
+    """Ask whether a bare weekday means this exact calendar date."""
+    day = calendar_date.fromisoformat(iso_date)
+    return f"Just to confirm, do you mean {day:%A}, {day.day} {day:%B}?"
+
+
 class ConversationReplyComposer:
     """Create concise replies that feel like an ongoing human conversation."""
 
@@ -311,6 +317,7 @@ class ConversationReplyComposer:
             suggested_artist,
             history,
         )
+        questions = self._confirm_weekday_date(questions, extracted)
         if questions:
             reply_parts = [acknowledgement]
             specialised_notice = self._specialised_collection_notice(
@@ -449,6 +456,7 @@ class ConversationReplyComposer:
             suggested_artist,
             history,
         )
+        questions = self._confirm_weekday_date(questions, extracted)
         reply_parts = []
         if _POSSIBLE_PATTERN.search(current_message):
             reply_parts.append("Yes, we can help with that.")
@@ -644,6 +652,7 @@ class ConversationReplyComposer:
                 suggested_artist,
                 history,
             )
+            questions = self._confirm_weekday_date(questions, extracted)
             if questions:
                 if last_requirement and len(questions) == 1:
                     sections.append(f"One last detail: {questions[0]}")
@@ -1753,6 +1762,22 @@ class ConversationReplyComposer:
             "or would you prefer another artist?"
         )
         return [offer if question == generic else question for question in questions]
+
+    def _confirm_weekday_date(
+        self,
+        questions: list[str],
+        extracted: TattooExtractionDraft,
+    ) -> list[str]:
+        """Ask the client to confirm the exact date behind a bare weekday."""
+        if not extracted.date_to_confirm:
+            return questions
+        confirmation = date_confirmation_question(extracted.date_to_confirm)
+        others = [
+            question
+            for question in questions
+            if question != _MISSING_QUESTIONS["preferred dates or availability"]
+        ]
+        return [confirmation, *others][: max(1, len(questions))]
 
     def _avoid_exact_repeat(
         self,
