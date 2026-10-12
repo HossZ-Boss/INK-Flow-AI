@@ -72,6 +72,14 @@ class TattooVisionAnalyzer:
 
         return self._unknown_output()
 
+    def load_images_as_data_uris(self, image_urls: list[str]) -> list[str]:
+        """Download images for other model calls, skipping failures."""
+        return [
+            data_uri
+            for image_url in image_urls
+            if (data_uri := self._download_as_data_uri(image_url))
+        ]
+
     def analyze_styles(self, image_urls: list[str]) -> list[StyleTag]:
         """Return only style tags for legacy callers."""
         return self.analyze_images(image_urls).style_tags
