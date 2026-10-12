@@ -73,6 +73,23 @@ _ARTIST_ONLY_IDEA_PATTERN = re.compile(
     r"a|an|it|one|piece|work|artist|tattoo|tattooist|tattoos|please))*$",
     flags=re.IGNORECASE,
 )
+_EXISTING_TATTOO_BEFORE_PATTERN = re.compile(
+    r"\b(?:i\s+(?:already\s+)?(?:have|had|got)|i've\s+(?:already\s+)?"
+    r"(?:got|had)|i\s+already\s+have|my\s+(?:existing|old|current|other)|"
+    r"existing|already\s+have)\s+(?:a\s+|an\s+|one\s+|some\s+|two\s+|"
+    r"(?:an?\s+)?(?:old|small|little|existing)\s+)?tattoos?\s+"
+    r"(?:on|in)\s+(?:my\s+|the\s+)?$"
+)
+_EXISTING_TATTOO_WORK_PATTERN = re.compile(
+    r"\b(?:cover(?:[- ]?up|\s+up|ing)?|rework|re-work|touch[- ]?up|"
+    r"extend|extension|add\s+to)\b"
+)
+_CLARIFICATION_QUESTION_PATTERN = re.compile(
+    r"[^.!?\n]*\b(?:(?:are|were)\s+you\s+(?:talking|asking|referring)\s+"
+    r"about|(?:what|which)\s+do\s+you\s+mean|do\s+you\s+mean|"
+    r"did\s+you\s+mean|you\s+mean)\b[^.!?\n]*\?",
+    flags=re.IGNORECASE,
+)
 _DIRECTIONAL_BACK_BEFORE_PATTERN = re.compile(
     r"\b(?:front|side|top|left|right|forth)\s+(?:to|and|&|or)\s+$"
 )
@@ -175,6 +192,9 @@ _PLACEMENT_SIZE_RANGES: dict[str, str] = {
     "side": "10-30 cm",
     "stomach": "10-30 cm",
     "abdomen": "10-30 cm",
+    "belly": "10-30 cm",
+    "upper belly": "10-25 cm",
+    "lower belly": "10-25 cm",
     "waist": "8-25 cm",
     "back": "15-35 cm",
     "upper back": "15-35 cm",
@@ -380,6 +400,10 @@ _PLACEMENT_ALIASES: tuple[tuple[str, str], ...] = (
     ("shoulder", "shoulder"),
     ("abdomen", "abdomen"),
     ("stomach", "stomach"),
+    ("upper belly", "upper belly"),
+    ("lower belly", "lower belly"),
+    ("belly", "belly"),
+    ("tummy", "stomach"),
     ("spine", "spine"),
     ("armpit", "armpit"),
     ("bicep", "bicep"),
@@ -798,6 +822,10 @@ class TattooTextExtractor:
                 preferred_artist=resolved_output.preferred_artist,
                 appointment_type=resolved_output.appointment_type,
                 availability=resolved_output.availability,
+                date_to_confirm=self._weekday_date_state(
+                    normalized_message,
+                    safe_chat_history,
+                )[1],
                 tattoo_project_type=resolved_output.tattoo_project_type,
                 party_size=resolved_output.party_size,
                 multi_entity_detected=(
@@ -1330,6 +1358,10 @@ class TattooTextExtractor:
             preferred_artist=resolved_fallback.preferred_artist,
             appointment_type=resolved_fallback.appointment_type,
             availability=resolved_fallback.availability,
+            date_to_confirm=self._weekday_date_state(
+                current_message,
+                recent_chat_history,
+            )[1],
             tattoo_project_type=resolved_fallback.tattoo_project_type,
             party_size=resolved_fallback.party_size,
             multi_entity_detected=(
@@ -1424,7 +1456,7 @@ class TattooTextExtractor:
             recent_chat_history=recent_chat_history,
             existing_db_state=existing_db_state,
         )
-        return _ExtractionSubset(
+        resolved = _ExtractionSubset(
             client_name=self._resolve_client_name(
                 llm_value=llm_output.client_name,
                 current_message=current_message,
@@ -1549,6 +1581,11 @@ class TattooTextExtractor:
                 existing_db_state=existing_db_state,
             ),
             missing_information=llm_output.missing_information,
+        )
+        return self._apply_weekday_date_confirmation(
+            resolved,
+            current_message,
+            recent_chat_history,
         )
 
     def _resolve_client_intent(self, current_message: str) -> ClientIntent:
@@ -1686,6 +1723,84 @@ class TattooTextExtractor:
         if len(set(offered)) != 1:
             return ""
         return offered[0]
+
+    def _weekday_date_state(
+        self,
+        current_message: str,
+        recent_chat_history: list[Message],
+    ) -> tuple[str, str]:
+        """Return (confirmed_date, date_to_confirm) for weekday-only dates.
+
+        A bare weekday such as "Thursday" or "next Thursday" is ambiguous, so
+        it stays unconfirmed until the client accepts the exact date the
+        studio offered back or states an explicit calendar date.
+        """
+        confirmed = ""
+        pending = ""
+        for prompt, reply in self._client_turns_with_prompts(
+            current_message,
+            recent_chat_history,
+        ):
+            offered = self._confirmed_date_offer(prompt, reply) if pending else ""
+            if offered:
+                confirmed, pending = offered, ""
+                continue
+            if not self._extract_date_from_text(reply):
+                continue
+            if self._extract_date_from_text(reply, allow_weekdays=False):
+                confirmed, pending = "", ""
+            else:
+                confirmed, pending = "", self._extract_date_from_text(reply)
+        return confirmed, pending
+
+    def _confirmed_date_offer(self, prompt: str, reply: str) -> str:
+        """Accept "yes" (or the same weekday) to a date the studio offered."""
+        if len(reply.strip()) > 80 or _HESITANT_REPLY_PATTERN.search(reply):
+            return ""
+        questions = " ".join(re.findall(r"[^.!?\n]*\?", prompt))
+        offered = self._extract_date_from_text(questions, allow_weekdays=False)
+        if not offered:
+            return ""
+        if _AFFIRMATIVE_REPLY_PATTERN.match(reply):
+            return offered
+        reply_weekday = self._extract_date_from_text(reply)
+        if reply_weekday and (
+            calendar_date.fromisoformat(reply_weekday).weekday()
+            == calendar_date.fromisoformat(offered).weekday()
+        ):
+            return offered
+        return ""
+
+    def _apply_weekday_date_confirmation(
+        self,
+        output: _ExtractionSubset,
+        current_message: str,
+        recent_chat_history: list[Message],
+    ) -> _ExtractionSubset:
+        """Hold back weekday-only dates and apply confirmed ones."""
+        confirmed, pending = self._weekday_date_state(
+            current_message,
+            recent_chat_history,
+        )
+        if confirmed:
+            return output.model_copy(
+                update={
+                    "date": confirmed,
+                    "availability": (
+                        f"{confirmed} at {output.time}"
+                        if output.time
+                        else confirmed
+                    ),
+                }
+            )
+        if not pending:
+            return output
+        availability = output.availability
+        if self._extract_date_from_text(availability):
+            availability = ""
+        return output.model_copy(
+            update={"date": "", "availability": availability}
+        )
 
     def _client_named_llm_artist(
         self,
@@ -2310,6 +2425,11 @@ class TattooTextExtractor:
         """Extract a design subject without treating logistics as the idea."""
         normalized = " ".join(text.split())
         if not normalized or normalized == _IMAGE_ONLY_MESSAGE:
+            return ""
+        normalized = " ".join(
+            _CLARIFICATION_QUESTION_PATTERN.sub(" ", normalized).split()
+        )
+        if not normalized:
             return ""
 
         separate_ideas = self._extract_same_client_tattoo_ideas(normalized)
@@ -3210,7 +3330,7 @@ class TattooTextExtractor:
 
     def _extract_placement_from_text(self, text: str) -> str:
         """Extract the latest positively stated common body placement."""
-        normalized = text.casefold()
+        normalized = _CLARIFICATION_QUESTION_PATTERN.sub(" ", text.casefold())
         normalized = re.sub(
             r'["\u201c][^"\u201d\n]{1,500}["\u201d]',
             " ",
@@ -3231,10 +3351,19 @@ class TattooTextExtractor:
             if additional:
                 return f"{self._count_label(1 + additional)} fingers"
 
+        reworks_existing_tattoo = bool(
+            _EXISTING_TATTOO_WORK_PATTERN.search(normalized)
+        )
         matches: list[tuple[int, int, str]] = []
         for alias, canonical in _PLACEMENT_ALIASES:
             pattern = rf"\b{re.escape(alias)}\b"
             for match in re.finditer(pattern, normalized):
+                if not reworks_existing_tattoo and (
+                    _EXISTING_TATTOO_BEFORE_PATTERN.search(
+                        normalized[max(0, match.start() - 50) : match.start()]
+                    )
+                ):
+                    continue
                 suffix = normalized[match.end() : match.end() + 8]
                 if alias in {"hand", "palm"} and re.match(
                     r"[- ]siz(?:e|ed)\b",
@@ -3317,7 +3446,11 @@ class TattooTextExtractor:
             return "color"
         return ""
 
-    def _extract_date_from_text(self, text: str) -> str:
+    def _extract_date_from_text(
+        self,
+        text: str,
+        allow_weekdays: bool = True,
+    ) -> str:
         """Extract and normalize the latest explicit preferred date."""
         today = calendar_date.today()
         candidates: list[tuple[int, calendar_date]] = []
@@ -3384,7 +3517,7 @@ class TattooTextExtractor:
             rf"\b(next\s+)?({weekday_names})\b",
             flags=re.IGNORECASE,
         )
-        for match in weekday_pattern.finditer(text):
+        for match in weekday_pattern.finditer(text if allow_weekdays else ""):
             weekday = _WEEKDAY_NUMBERS[match.group(2).casefold()]
             offset = (weekday - today.weekday()) % 7
             if offset == 0:
