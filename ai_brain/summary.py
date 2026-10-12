@@ -57,6 +57,10 @@ class HighRiskSummaryBuilder:
         else:
             sentences.append("Artist assignment is pending.")
 
+        price = self._price_description(analysis)
+        if price:
+            sentences.append(price)
+
         return " ".join(
             sentence if sentence.endswith((".", "!", "?")) else sentence + "."
             for sentence in sentences
@@ -144,6 +148,22 @@ class HighRiskSummaryBuilder:
         if not clauses:
             return ""
         return f"The client {self._natural_list(clauses)}."
+
+    def _price_description(self, analysis: AIExtractionOutput) -> str:
+        """Describe the staff-only price suggestion, if one exists."""
+        price = analysis.price_suggestion
+        if price is None:
+            return ""
+        source = (
+            "based on approved studio prices"
+            if price.basis == "approved_history"
+            else "AI estimate"
+        )
+        details = [f"Suggested price ({source}, not approved): {price.label()}"]
+        if price.estimated_hours:
+            details.append(f"about {self._clean_text(price.estimated_hours)}")
+        details.append(f"{price.confidence_level} confidence")
+        return ", ".join(details) + "."
 
     def _style(self, analysis: AIExtractionOutput) -> list[str]:
         """Return known style tags for the narrative description."""
