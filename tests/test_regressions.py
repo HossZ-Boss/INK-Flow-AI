@@ -226,8 +226,8 @@ def test_complete_price_request_is_high_risk() -> None:
     assert "studio team review" in result.draft_reply
 
 
-def test_cold_start_does_not_force_incomplete_intake_to_high_risk() -> None:
-    """Cold-start artist routing does not override missing-based risk."""
+def test_artist_routing_does_not_force_incomplete_intake_to_high_risk() -> None:
+    """Artist routing does not override missing-based risk."""
     router = TattooRouter(llm=cast(ChatOpenAI, FailingLLM()))
     draft = TattooExtractionDraft(
         tattoo_idea="Floral tattoo",
