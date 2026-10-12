@@ -16,6 +16,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
+    volumes:
+      - learning_data:/app/data
     cap_drop:
       - ALL
     security_opt:
@@ -26,6 +28,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  learning_data:
+    name: tattoo_hysteria_ai_learning_data
 
 networks:
   tattoo_hysteria_net:
