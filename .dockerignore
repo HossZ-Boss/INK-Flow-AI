@@ -12,6 +12,7 @@ __pycache__
 .env.*
 !.env.example
 htmlcov
+data
 tests
 *.md
 docker-compose*.yml
