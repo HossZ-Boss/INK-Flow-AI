@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
@@ -20,14 +21,23 @@ from .errors import AnalysisPipelineError
 from .extraction import TattooTextExtractor
 from .llm_health import llm_quota_exhausted, reset_llm_health
 from .outlook_classification import OutlookInquiryClassifier
+from .price_suggestion import TattooPriceSuggester
 from .routing import TattooRouter
 from .schemas import (
     AIExtractionOutput,
     Message,
     MessageSource,
+    PriceSuggestion,
     TattooInquiryInput,
 )
 from .vision import TattooVisionAnalyzer
+
+if TYPE_CHECKING:
+    from .vector_store import VectorStoreManager
+
+LOGGER = logging.getLogger(__name__)
+
+_STATE_IMAGE_KEYS = ("reference_images", "previous_image_urls", "image_urls")
 
 _QUOTA_EXHAUSTED_REASON = (
     "AI provider quota exhausted: no reply was generated. "
@@ -54,13 +64,32 @@ class StudioAIBrain:
         router: TattooRouter | None = None,
         decision_engine: StudioDecisionEngine | None = None,
         outlook_classifier: OutlookInquiryClassifier | None = None,
+        price_suggester: TattooPriceSuggester | None = None,
+        vector_store: VectorStoreManager | None = None,
     ) -> None:
+        """Build the pipeline; ``vector_store`` is the shared learning index."""
         self.vision_analyzer = vision_analyzer or TattooVisionAnalyzer()
         self.text_extractor = text_extractor or TattooTextExtractor()
-        self.router = router or TattooRouter()
-        self.decision_engine = decision_engine or StudioDecisionEngine()
+        self.router = router or TattooRouter(vector_store=vector_store)
+        self.decision_engine = decision_engine or StudioDecisionEngine(
+            vector_store=vector_store
+        )
         self.outlook_classifier = (
             outlook_classifier or OutlookInquiryClassifier()
+        )
+        chat_model = getattr(self.router, "chat_model", None)
+        self.price_suggester = price_suggester or (
+            TattooPriceSuggester(
+                llm=chat_model,
+                vector_store=vector_store,
+                image_loader=getattr(
+                    self.vision_analyzer,
+                    "load_images_as_data_uris",
+                    None,
+                ),
+            )
+            if chat_model is not None
+            else None
         )
 
     def process_inquiry(
@@ -124,6 +153,16 @@ class StudioAIBrain:
         )
         if llm_quota_exhausted():
             return self._suppress_reply_for_quota(analysis)
+        if analysis.risk_level == "high":
+            analysis = analysis.model_copy(
+                update={
+                    "price_suggestion": self._suggest_price(
+                        inquiry,
+                        analysis,
+                        vision_output.visual_description,
+                    )
+                }
+            )
         is_reply_channel = inquiry.message_source == "whatsapp" or (
             inquiry.message_source == "outlook"
             and outlook_classification.is_tattoo_inquiry
@@ -156,6 +195,46 @@ class StudioAIBrain:
             current_message=inquiry.current_message,
             context=context,
         )
+
+    def _suggest_price(
+        self,
+        inquiry: TattooInquiryInput,
+        analysis: AIExtractionOutput,
+        visual_description: str,
+    ) -> PriceSuggestion | None:
+        """Return a staff-only price range without ever failing the request."""
+        if self.price_suggester is None:
+            return None
+        try:
+            return self.price_suggester.suggest(
+                analysis,
+                image_urls=self._reference_image_urls(inquiry),
+                visual_description=visual_description,
+                channel=inquiry.message_source,
+            )
+        except Exception:
+            LOGGER.exception("Price suggestion failed; continuing without it.")
+            return None
+
+    def _reference_image_urls(self, inquiry: TattooInquiryInput) -> list[str]:
+        """Collect new and previously stored reference image URLs."""
+        urls = list(inquiry.new_image_urls)
+        state = inquiry.existing_db_state
+        for record in (state, state.get("intake"), state.get("lead")):
+            if not isinstance(record, dict):
+                continue
+            for key in _STATE_IMAGE_KEYS:
+                value = record.get(key)
+                if isinstance(value, str):
+                    value = [value]
+                if isinstance(value, list):
+                    urls.extend(
+                        item.strip()
+                        for item in value
+                        if isinstance(item, str)
+                        and item.strip().startswith(("http://", "https://"))
+                    )
+        return list(dict.fromkeys(urls))
 
     def _suppress_reply_for_quota(
         self,
