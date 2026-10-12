@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
+from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -14,7 +15,6 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from .artist_config import ArtistConfigManager, ArtistProfile
-from .cold_start import COLD_START_THRESHOLD, ColdStartManager
 from .decision_schemas import DecisionHistoryExample
 from .llm import get_chat_model
 from .llm_health import llm_failure_context, record_llm_failure
@@ -29,6 +29,7 @@ from .reply import (
     ARTIST_CHOICE_HELP_PATTERN,
     ARTIST_ROSTER_PATTERN,
     ConversationReplyComposer,
+    date_confirmation_question,
 )
 from .review_policy import (
     SPECIALISED_PLACEMENT_REASON,
@@ -124,7 +125,6 @@ class _ArtistRoutingDecision(BaseModel):
     suggested_artist: SuggestedArtist
     confidence_level: ConfidenceLevel
     reasoning: str = Field(min_length=1, max_length=500)
-    cold_start: bool = False
 
 
 class TattooRouter:
@@ -137,7 +137,6 @@ class TattooRouter:
         reply_composer: ConversationReplyComposer | None = None,
         artist_config_manager: ArtistConfigManager | None = None,
         vector_store: VectorStoreManager | None = None,
-        cold_start_manager: ColdStartManager | None = None,
         routing_rule_engine: RoutingRuleEngine | None = None,
     ) -> None:
         """Initialize model, configuration, retrieval, and safety services."""
@@ -153,16 +152,16 @@ class TattooRouter:
             else ArtistConfigManager()
         )
         self._vector_store = vector_store
-        self._cold_start_manager = (
-            cold_start_manager
-            if cold_start_manager is not None
-            else ColdStartManager()
-        )
         self._routing_rule_engine = (
             routing_rule_engine
             if routing_rule_engine is not None
             else RoutingRuleEngine()
         )
+
+    @property
+    def chat_model(self) -> ChatOpenAI:
+        """Return the chat model shared with other studio-facing services."""
+        return self._llm
 
     def route(
         self,
@@ -437,6 +436,11 @@ class TattooRouter:
                     ),
                     "suggested_artist_profile": suggested_artist_details,
                     "artist_directory": artist_directory,
+                    "date_confirmation_question": (
+                        date_confirmation_question(extracted.date_to_confirm)
+                        if extracted.date_to_confirm
+                        else ""
+                    ),
                 },
                 missing_information=extracted.missing_information,
                 recent_chat_history=recent_chat_history,
@@ -498,6 +502,17 @@ class TattooRouter:
             raise ValueError("Draft reply delegates size selection to an artist.")
         if extracted.conversation_status == "closed" and "?" in reply:
             raise ValueError("Closed inquiries cannot contain questions.")
+        if extracted.date_to_confirm:
+            pending = date.fromisoformat(extracted.date_to_confirm)
+            if not re.search(
+                rf"\b{pending.day}(?:st|nd|rd|th)?\s+{pending:%B}\b"
+                rf"|\b{pending:%B}\s+{pending.day}\b",
+                reply,
+                flags=re.IGNORECASE,
+            ) or "?" not in reply:
+                raise ValueError(
+                    "Draft must ask the client to confirm the exact date."
+                )
         mentioned_artists = [
             artist
             for artist in ARTIST_PREFERENCE_OPTIONS
@@ -758,7 +773,7 @@ class TattooRouter:
         self,
         extracted: TattooExtractionDraft,
     ) -> _ArtistRoutingDecision:
-        """Select an artist from cold start, configured rules, or history."""
+        """Select an artist from configured rules or history."""
         if specialised_placement_requires_review(extracted.placement):
             return _ArtistRoutingDecision(
                 suggested_artist="Unclear",
@@ -772,29 +787,7 @@ class TattooRouter:
         if explicit is not None:
             return explicit
 
-        is_cold_start, record_count = self._cold_start_status()
         rules = self._routing_rule_engine.evaluate(extracted)
-        rule_decision = self._suggest_from_rules(
-            rules=rules,
-            matches=[],
-            extracted=extracted,
-        )
-        if rule_decision is not None:
-            return rule_decision
-        if is_cold_start:
-            configured = self._suggest_from_config(extracted)
-            if configured.suggested_artist != "Unclear":
-                return configured
-            self._cold_start_manager.log_cold_start_warning()
-            return _ArtistRoutingDecision(
-                suggested_artist="Unclear",
-                confidence_level="low",
-                reasoning=self._cold_start_manager.build_status_message(
-                    record_count
-                ),
-                cold_start=True,
-            )
-
         matches = self._search_similar_cases(extracted)
         rule_decision = self._suggest_from_rules(
             rules=rules,
@@ -835,20 +828,11 @@ class TattooRouter:
             ),
         )
 
-    def _cold_start_status(self) -> tuple[bool, int]:
-        """Return cold-start state and a safe collected-record count."""
-        if self._vector_store is None:
-            return True, 0
-        record_count = self._cold_start_manager.get_record_count(
-            self._vector_store
-        )
-        return record_count < COLD_START_THRESHOLD, record_count
-
     def _search_similar_cases(
         self,
         extracted: TattooExtractionDraft,
     ) -> list[tuple[float, DecisionHistoryExample]]:
-        """Retrieve similar verified cases after cold start has ended."""
+        """Retrieve similar staff-verified cases from the learning index."""
         if self._vector_store is None:
             return []
         try:
@@ -1172,12 +1156,7 @@ class TattooRouter:
         current_message: str,
         recent_chat_history: list[Message],
     ) -> _RoutingLLMOutput:
-        """Skip routing LLM work during cold start and call it otherwise."""
-        if artist_decision.cold_start:
-            return _RoutingLLMOutput(
-                confidence_level="low",
-                ai_reasoning=artist_decision.reasoning,
-            )
+        """Generate routing reasoning and the client draft reply."""
         return self._generate_reasoning_and_reply(
             extracted=extracted,
             suggested_artist=artist_decision.suggested_artist,
