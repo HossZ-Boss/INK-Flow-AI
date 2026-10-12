@@ -6,10 +6,18 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
+from ai_brain.decision_schemas import (
+    DecisionAction,
+    DecisionOutcome,
+    InquiryChannel,
+    MoneyRange,
+)
 from ai_brain.schemas import (
     AIExtractionOutput,
     Message,
+    PriceSuggestion,
     RiskLevel,
+    StyleTag,
     TattooInquiryInput,
 )
 
@@ -17,6 +25,9 @@ __all__ = [
     "AIExtractionOutput",
     "ErrorResponse",
     "HealthResponse",
+    "LearningFeedbackInput",
+    "LearningFeedbackResponse",
+    "LearningStatusResponse",
     "TattooInquiryInput",
     "TelegramSummaryInput",
     "TelegramSummaryResponse",
@@ -121,3 +132,67 @@ class TelegramSummaryResponse(BaseModel):
     summary: StrictStr = Field(min_length=1, max_length=5000)
     draft_reply: StrictStr = Field(default="", max_length=2000)
     telegram_message: StrictStr = Field(min_length=1, max_length=7000)
+    price_suggestion: PriceSuggestion | None = Field(
+        default=None,
+        description="Staff-only AI price suggestion; not approved for clients.",
+    )
+
+
+class LearningFeedbackInput(BaseModel):
+    """Staff-reviewed outcome the backend sends after a request is handled."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    inquiry_id: StrictStr | None = Field(
+        default=None,
+        max_length=60,
+        pattern=r"^[A-Za-z0-9._-]+$",
+        description=(
+            "Backend request ID. Re-sending the same ID with the same content "
+            "is ignored; different content for the same ID is rejected."
+        ),
+    )
+    channel: InquiryChannel = "whatsapp"
+    style_tags: list[StyleTag] = Field(default_factory=list, max_length=10)
+    placement: StrictStr = Field(default="", max_length=100)
+    size_estimate_cm: StrictStr = Field(default="", max_length=100)
+    color_preference: StrictStr = Field(default="", max_length=100)
+    ai_suggested_artist: StrictStr = Field(
+        default="",
+        max_length=80,
+        description="Artist the AI suggested (display name or key).",
+    )
+    final_artist: StrictStr = Field(
+        default="",
+        max_length=80,
+        description="Artist staff assigned (display name or key).",
+    )
+    ai_suggested_action: DecisionAction = "artist_review"
+    final_action: DecisionAction = "accept_request"
+    ai_suggestion_outcome: DecisionOutcome = Field(
+        description="correct, corrected, or rejected.",
+    )
+    correction_reason: StrictStr | None = Field(default=None, max_length=500)
+    approved_price_range: MoneyRange | None = Field(
+        default=None,
+        description="Price staff approved, used to anchor future estimates.",
+    )
+
+
+class LearningFeedbackResponse(BaseModel):
+    """Result of adding one staff-reviewed example to the learning index."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    example_id: str
+    record_count: int
+
+
+class LearningStatusResponse(BaseModel):
+    """Current size of the learning index."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    record_count: int
+    records_with_approved_price: int
