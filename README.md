@@ -116,6 +116,49 @@ returns them. Telegram consumers must not merge prices, schedules, service
 codes, or draft replies from older intake records. Request and active-intake
 association remains the calling backend's responsibility.
 
+## Staff-only price suggestions
+
+Every high-risk analysis includes `price_suggestion`, both in
+`/api/v1/inquiries/analyze` and `/api/v1/inquiries/telegram-summary`. The
+model estimates a EUR range for an Amsterdam studio from the tattoo details
+and up to three reference images. When staff-approved prices for similar
+requests exist in the learning index, they are passed in as anchors. The
+Telegram summary ends with a line such as
+`Suggested price (AI estimate, not approved): €350-500, about 3-4 hours,
+medium confidence.` The field is `null` for low-risk requests or when no
+estimate could be made. It is marked `internal_only` and must never be sent
+to the client.
+
+## Learning layer
+
+Learning is active by default (`LEARNING_ENABLED=true`). After staff finish
+reviewing a request, the backend posts the outcome to
+`POST /api/v1/learning/feedback`:
+
+```json
+{
+  "inquiry_id": "129",
+  "channel": "whatsapp",
+  "style_tags": ["blackwork"],
+  "placement": "forearm",
+  "size_estimate_cm": "15 cm",
+  "color_preference": "black-and-grey",
+  "ai_suggested_artist": "Sandra",
+  "final_artist": "Hossam",
+  "ai_suggestion_outcome": "corrected",
+  "correction_reason": "Hossam had availability.",
+  "approved_price_range": {"currency": "EUR", "minimum": "400", "maximum": "550"}
+}
+```
+
+Artists may be given by display name or key. Re-sending the same
+`inquiry_id` with the same content is a no-op; different content for an
+existing `inquiry_id` returns 409. The example is embedded, added to the
+FAISS index, and saved to `LEARNING_INDEX_PATH` (default
+`data/learning.faiss`). Future artist routing, next-action decisions, and
+price suggestions use it immediately; there is no minimum record count.
+`GET /api/v1/learning/status` reports the record counts.
+
 ## Run the tests
 
 ```powershell
