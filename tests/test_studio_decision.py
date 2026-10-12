@@ -79,7 +79,7 @@ class StaticRouter:
 
 
 def _warm_decision_engine() -> StudioDecisionEngine:
-    """Return an engine past cold start with request-context fallback."""
+    """Return an engine with vector history and request-context fallback."""
     vector_store = Mock(spec=VectorStoreManager)
     vector_store.records = tuple(range(10))
     vector_store.search_similar_cases.return_value = []
