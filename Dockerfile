@@ -23,6 +23,7 @@ RUN python -m pip install --requirement requirements.txt
 COPY --chown=app:app ai_brain ./ai_brain
 COPY --chown=app:app api ./api
 COPY --chown=app:app config ./config
+RUN mkdir -p /app/data && chown app:app /app/data
 
 USER app
 
