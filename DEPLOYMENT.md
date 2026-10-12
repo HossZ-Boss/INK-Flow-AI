@@ -175,24 +175,26 @@ docker compose -f docker-compose.prod.yml up -d --force-recreate
 
 Never run `docker system prune -af` on this shared EC2 instance.
 
-## 8. Required learning-layer follow-up
+## 8. Learning layer persistence
 
-The two current backend endpoints analyze inquiries and create Telegram-ready
-summaries. They do not send `StudioLearningRecord` objects back to the AI
-service. The default FastAPI dependency also does not load a persisted FAISS
-index at startup.
+The service loads the learning index from `LEARNING_INDEX_PATH` (default
+`data/learning.faiss`, i.e. `/app/data` in the container) at startup and saves
+it after every `POST /api/v1/learning/feedback`. Compose mounts the named
+volume `tattoo_hysteria_ai_learning_data` at `/app/data`, so the index
+survives rebuilds and restarts even though the root filesystem is read-only.
+Never delete that volume unless you intend to discard everything the AI has
+learned. Back it up with:
 
-This means the deployed service will safely remain in cold-start mode until a
-separate backend-to-AI learning contract is agreed and implemented. Before
-enabling automatic artist or price suggestions, define one of these flows:
+```bash
+docker run --rm -v tattoo_hysteria_ai_learning_data:/data -v "$PWD":/backup \
+  alpine tar czf /backup/learning-data.tgz -C /data .
+```
 
-- An internal endpoint that accepts a validated learning record, embeds it,
-  updates FAISS, and persists the index atomically.
-- A startup synchronization job that reads verified records through a backend
-  interface and rebuilds or restores the FAISS index.
+If the index files are unreadable at startup, they are renamed with a
+`.broken-<timestamp>` suffix and a new empty index is started. Set
+`LEARNING_ENABLED=false` to turn learning off entirely.
 
-Do not bypass the ten-record cold-start threshold. Keep one Uvicorn worker until
-FAISS writes and persistence are coordinated across workers or replicas.
+Keep one Uvicorn worker: index writes are coordinated only inside one process.
 
 When validating Compose, use the quiet form below because the normal `config`
 output expands environment values and can expose secrets in logs:
