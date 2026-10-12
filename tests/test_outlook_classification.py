@@ -93,6 +93,32 @@ def test_short_answer_in_tattoo_thread_is_eligible() -> None:
     )
 
 
+def test_studio_name_alone_is_not_a_tattoo_request() -> None:
+    """Addressing "Tattoo Hysteria" in a sales email is not intake."""
+    assert not _classify(
+        "Hoi team Tattoo Hysteria, Ik hoop dat je het niet erg vindt dat ik "
+        "nog één keer van me laat horen: Waarschijnlijk staat er nu even "
+        "niets op de planning bij Tattoo Hysteria. Mocht er later dit jaar "
+        "behoefte zijn aan een gezellige pizza-avond op eigen locatie, "
+        "zonder dat het een vermogen kost, dan weet je ons te vinden. "
+        "P.S. Weet jij wie hier binnen jullie team normaal over gaat? "
+        "Met smakelijke groet, Alphons de Vries | Mede-eigenaar Holy Moly "
+        "Pizza. Als dit niet past, laat het gerust weten, dan hou ik het "
+        "hierbij.",
+        email="alphonsdevries.av@enjoyholymolypizza.com",
+    )
+    assert not _classify(
+        "Hello Tattoo Hysteria team, we offer office cleaning in Amsterdam."
+    )
+
+
+def test_dutch_tattoo_requests_are_eligible() -> None:
+    """Dutch requests still pass once the studio name is ignored."""
+    assert _classify("Hoi Tattoo Hysteria, ik wil graag een tattoo laten zetten.")
+    assert _classify("Hallo, hoeveel kost een kleine tattoo?")
+    assert _classify("Ik zou graag een afspraak maken voor een tatoeage.")
+
+
 def test_courtesy_only_email_does_not_trigger_another_reply() -> None:
     """A thank-you email must not create an unnecessary response loop."""
     assert not _classify("Thank you!")

@@ -45,9 +45,10 @@ _COURTESY_ONLY_PATTERN = re.compile(
     r"sounds\s+good|perfect|great)[.!\s]*$",
     flags=re.IGNORECASE,
 )
+_STUDIO_BRAND_PATTERN = re.compile(r"\btattoo\s+hysteria\b", flags=re.IGNORECASE)
 _DIRECT_TATTOO_PATTERN = re.compile(
-    r"\b(?:tattoo|tattoos|tattooing|tattooed|tatto|body\s+art|inked|"
-    r"get\s+(?:some\s+)?ink|new\s+piece|cover[- ]?up|touch[- ]?up)\b",
+    r"\b(?:tattoo|tattoos|tattooing|tattooed|tatto|tatoeages?|body\s+art|"
+    r"inked|get\s+(?:some\s+)?ink|new\s+piece|cover[- ]?up|touch[- ]?up)\b",
     flags=re.IGNORECASE,
 )
 _REQUEST_INTENT_PATTERN = re.compile(
@@ -56,7 +57,9 @@ _REQUEST_INTENT_PATTERN = re.compile(
     r"\b(?:interested\s+in|looking\s+to\s+get)|"
     r"\b(?:can|could|would)\s+(?:i|we|you)|"
     r"\b(?:book|booking|appointment|consultation|how\s+much|cost|price|"
-    r"quote|availability|available)\b",
+    r"quote|availability|available)\b|"
+    r"\b(?:ik|wij|we)\s+(?:wil|willen|zou|zouden|ben\s+op\s+zoek)|"
+    r"\b(?:graag|afspraak|hoeveel|prijs|kosten|beschikbaar|laten\s+zetten)\b",
     flags=re.IGNORECASE,
 )
 _STYLE_PATTERN = re.compile(
@@ -164,6 +167,7 @@ class OutlookInquiryClassifier:
 
     def _has_direct_tattoo_request(self, message: str) -> bool:
         """Recognize explicit and strongly implied tattoo requests."""
+        without_brand = _STUDIO_BRAND_PATTERN.sub(" ", message)
         evidence = (
             bool(_STYLE_PATTERN.search(message)),
             bool(_PLACEMENT_PATTERN.search(message)),
@@ -171,7 +175,7 @@ class OutlookInquiryClassifier:
             bool(_STUDIO_PATTERN.search(message)),
             bool(_MEASUREMENT_PATTERN.search(message)),
         )
-        if _DIRECT_TATTOO_PATTERN.search(message):
+        if _DIRECT_TATTOO_PATTERN.search(without_brand):
             return bool(_REQUEST_INTENT_PATTERN.search(message)) or any(evidence)
         if (
             _REQUEST_INTENT_PATTERN.search(message)
