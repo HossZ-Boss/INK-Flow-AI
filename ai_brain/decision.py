@@ -10,7 +10,6 @@ from hashlib import sha256
 from typing import TYPE_CHECKING
 
 from .artist_config import ArtistConfigManager
-from .cold_start import COLD_START_THRESHOLD, ColdStartManager
 from .decision_schemas import (
     ArtistOption,
     ArtistSuggestion,
@@ -42,7 +41,6 @@ class StudioDecisionEngine:
         self,
         pricing_estimator: InternalPricingEstimator | None = None,
         vector_store: VectorStoreManager | None = None,
-        cold_start_manager: ColdStartManager | None = None,
         artist_config_manager: ArtistConfigManager | None = None,
     ) -> None:
         """Initialize deterministic decision and candidate-retrieval services.
@@ -50,8 +48,7 @@ class StudioDecisionEngine:
         Args:
             pricing_estimator: Optional staff-only pricing implementation.
             vector_store: Optional FAISS manager containing verified examples.
-                When omitted, cold start fails closed at zero records.
-            cold_start_manager: Optional safety-policy implementation.
+                When omitted, request-scoped decision history is used.
             artist_config_manager: Optional studio artist catalog used to
                 validate active status and detected-style compatibility.
         """
@@ -61,11 +58,6 @@ class StudioDecisionEngine:
             else InternalPricingEstimator()
         )
         self._vector_store = vector_store
-        self._cold_start_manager = (
-            cold_start_manager
-            if cold_start_manager is not None
-            else ColdStartManager()
-        )
         self._artist_config = (
             artist_config_manager
             if artist_config_manager is not None
@@ -79,10 +71,6 @@ class StudioDecisionEngine:
         context: StudioDecisionContext,
     ) -> StudioDecisionOutput:
         """Create staff-only artist, action, and price recommendations."""
-        cold_start_decision = self._build_cold_start_decision(analysis)
-        if cold_start_decision is not None:
-            return cold_start_decision
-
         ranked = self._rank_examples(analysis, context)
         artist, artist_ids = self._suggest_artist(analysis, context, ranked)
         estimate = self._pricing_estimator.estimate(
@@ -146,60 +134,6 @@ class StudioDecisionEngine:
         """Detect a complete numeric amount without substring collisions."""
         pattern = rf"(?<![\d.]){re.escape(amount)}(?![\d.])"
         return bool(re.search(pattern, draft))
-
-    def _build_cold_start_decision(
-        self,
-        analysis: AIExtractionOutput,
-    ) -> StudioDecisionOutput | None:
-        """Return a fail-closed manual decision until ten records exist."""
-        is_cold_start, record_count = self._cold_start_status()
-        if not is_cold_start:
-            return None
-
-        self._cold_start_manager.log_cold_start_warning()
-        reasoning = self._cold_start_manager.build_status_message(
-            record_count
-        )
-        analysis_payload = analysis.model_dump(mode="python")
-        analysis_payload.update(
-            {
-                "suggested_artist": "Unclear",
-                "confidence_level": "low",
-                "ai_reasoning": reasoning,
-                "risk_level": "high",
-                "auto_reply_allowed": False,
-                "auto_reply": False,
-                "telegram_review_required": True,
-            }
-        )
-        safe_analysis = AIExtractionOutput.model_validate(analysis_payload)
-        return StudioDecisionOutput(
-            analysis=safe_analysis,
-            artist_suggestion=ArtistSuggestion(
-                artist_key=None,
-                artist_name=None,
-                confidence_level="low",
-                reasoning=reasoning,
-                source="unresolved",
-            ),
-            suggested_next_action=NextAction(
-                action="artist_review",
-                reason=reasoning,
-                priority="high",
-                requires_human_review=True,
-            ),
-            internal_price_estimate=None,
-            applied_history_example_ids=[],
-        )
-
-    def _cold_start_status(self) -> tuple[bool, int]:
-        """Return cold-start state and its safe collected-record count."""
-        if self._vector_store is None:
-            return True, 0
-        record_count = self._cold_start_manager.get_record_count(
-            self._vector_store
-        )
-        return record_count < COLD_START_THRESHOLD, record_count
 
     def build_learning_record(
         self,
@@ -322,10 +256,11 @@ class StudioDecisionEngine:
         except Exception as exc:  # pragma: no cover - defensive branch
             LOGGER.warning("Decision vector search failed: %s", exc)
             return list(context.decision_history)
-        if not matches:
-            return list(context.decision_history)
         return self._deduplicate_examples(
-            [example for _, example in matches]
+            [
+                *context.decision_history,
+                *(example for _, example in matches),
+            ]
         )
 
     def _build_vector_query(self, analysis: AIExtractionOutput) -> str:
