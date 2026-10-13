@@ -27,6 +27,13 @@ previous_image_id="$({
     docker inspect --format '{{.Image}}' "${CONTAINER_NAME}" 2>/dev/null
 } || true)"
 
+if [[ -n "${previous_image_id}" ]] \
+    && ! docker image inspect "${previous_image_id}" >/dev/null 2>&1; then
+    echo "Image of the current container no longer exists;" \
+        "deploying without a rollback image." >&2
+    previous_image_id=""
+fi
+
 if [[ -n "${previous_image_id}" ]]; then
     docker image rm "${ROLLBACK_IMAGE}" >/dev/null 2>&1 || true
     docker image tag "${previous_image_id}" "${ROLLBACK_IMAGE}"
